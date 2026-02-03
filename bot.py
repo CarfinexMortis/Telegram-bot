@@ -121,14 +121,17 @@ async def category_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     cat = q.data.split("|")[1]
-    context.user_data["category"] = cat
+    if cat not in products_by_cat:
+        await q.edit_message_text("❌ Категория не найдена.")
+        await show_main_menu(q)
+        return
 
-    keyboard = [[InlineKeyboardButton(p, callback_data=f"prod|{p}")]
-                for p in products_by_cat[cat]]
+    context.user_data["category"] = cat
+    keyboard = [[InlineKeyboardButton(p, callback_data=f"prod|{p}")] for p in products_by_cat[cat]]
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back")])
 
     await q.edit_message_text(
-        f"Категория: {cat}",
+        f"Категория: {cat}\nВыберите продукт:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -138,12 +141,19 @@ async def product_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     product = q.data.split("|")[1]
-    context.user_data["product"] = product
-
-    for cat, items in products_by_cat.items():
+    # Ищем категорию
+    cat = None
+    for c, items in products_by_cat.items():
         if product in items:
-            context.user_data["category"] = cat
+            cat = c
             break
+    if not cat:
+        await q.edit_message_text("❌ Продукт не найден.")
+        await show_main_menu(q)
+        return
+
+    context.user_data["product"] = product
+    context.user_data["category"] = cat
 
     await q.edit_message_text(f"{product}\nВведите массу (г или кг):")
 
@@ -166,13 +176,24 @@ async def meal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
+    if not all(k in context.user_data for k in ("grams", "product", "category")):
+        await q.edit_message_text("❌ Сначала выберите продукт и укажите массу.")
+        reset_state(context)
+        await show_main_menu(q)
+        return
+
     meal = q.data.split("|")[1]
     grams = context.user_data["grams"]
     product = context.user_data["product"]
     cat = context.user_data["category"]
 
-    data = products_by_cat[cat][product]
+    if cat not in products_by_cat or product not in products_by_cat[cat]:
+        await q.edit_message_text("❌ Продукт не найден.")
+        reset_state(context)
+        await show_main_menu(q)
+        return
 
+    data = products_by_cat[cat][product]
     delta = {
         "cal": data["calories"] * grams / 100,
         "p": data["protein"] * grams / 100,
@@ -233,8 +254,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(q)
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"hist|{d}")]
-                for d in sorted(days.keys(), reverse=True)[:14]]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"hist|{d}")] for d in sorted(days.keys(), reverse=True)[:14]]
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back")])
 
     await q.edit_message_text(
@@ -248,9 +268,11 @@ async def history_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     d = q.data.split("|")[1]
     day = await get_user_day(q.from_user.id, d)
+    if not day:
+        await q.edit_message_text("❌ Данные за этот день отсутствуют.")
+        return
 
     meals = {"z": "🍳 Завтрак", "o": "🍲 Обед", "u": "🌙 Ужин", "p": "🍎 Перекус"}
-
     text = f"📅 {d}\n\n🔥 {day['total']['cal']:.1f} ккал\n\n"
     for k, name in meals.items():
         m = day["meals"][k]
@@ -259,7 +281,7 @@ async def history_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await q.edit_message_text(text)
 
-# ================== ТЕКСТ ==================
+# ================== ОБРАБОТКА ТЕКСТА ==================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 

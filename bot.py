@@ -1,4 +1,6 @@
 import json
+import asyncio
+from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,10 +12,67 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = "8060994884:AAEjYeBOg8RiLZ66-W3uEemsVW60ACiJA2M"
+USER_DATA_FILE = Path("users_data.json")
+USER_TOTALS_DEFAULT = {"cal": 0, "p": 0, "f": 0, "c": 0}
+user_totals_lock = asyncio.Lock()
 
 # ================== ЗАГРУЗКА БАЗЫ ==================
 with open("products.json", "r", encoding="utf-8") as f:
     products_by_cat = json.load(f)
+
+def load_user_totals():
+    if not USER_DATA_FILE.exists():
+        return {}
+    try:
+        with USER_DATA_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    totals = {}
+    for user_id, stats in data.items():
+        totals[user_id] = {
+            "cal": float(stats.get("cal", stats.get("calories", 0))),
+            "p": float(stats.get("p", stats.get("protein", 0))),
+            "f": float(stats.get("f", stats.get("fat", 0))),
+            "c": float(stats.get("c", stats.get("carbs", 0))),
+        }
+    return totals
+
+def save_user_totals(totals: dict):
+    data = {
+        str(user_id): {
+            "cal": stats["cal"],
+            "p": stats["p"],
+            "f": stats["f"],
+            "c": stats["c"],
+        }
+        for user_id, stats in totals.items()
+    }
+    USER_DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+
+user_totals = load_user_totals()
+
+async def ensure_user_totals(user_id: int):
+    async with user_totals_lock:
+        key = str(user_id)
+        if key not in user_totals:
+            user_totals[key] = USER_TOTALS_DEFAULT.copy()
+            save_user_totals(user_totals)
+
+async def get_user_totals(user_id: int) -> dict:
+    async with user_totals_lock:
+        return user_totals.get(str(user_id), USER_TOTALS_DEFAULT.copy()).copy()
+
+async def add_user_totals(user_id: int, delta: dict):
+    async with user_totals_lock:
+        key = str(user_id)
+        current = user_totals.setdefault(key, USER_TOTALS_DEFAULT.copy())
+        current["cal"] += delta.get("cal", 0)
+        current["p"] += delta.get("p", 0)
+        current["f"] += delta.get("f", 0)
+        current["c"] += delta.get("c", 0)
+        save_user_totals(user_totals)
 
 # ================== УТИЛИТЫ ==================
 def reset_state(context):
@@ -47,7 +106,7 @@ async def show_main_menu(target):
 
 # ================== /start ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault("day_total", {"cal": 0, "p": 0, "f": 0, "c": 0})
+    await ensure_user_totals(update.effective_user.id)
     reset_state(context)
     await show_main_menu(update)
 
@@ -110,6 +169,7 @@ async def meal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     grams = context.user_data["grams"]
     product = context.user_data["product"]
     cat = context.user_data["category"]
+    user_id = q.from_user.id
 
     data = products_by_cat[cat][product]
 
@@ -118,11 +178,7 @@ async def meal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f = data["fat"] * grams / 100
     c = data["carbs"] * grams / 100
 
-    day = context.user_data.setdefault("day_total", {"cal": 0, "p": 0, "f": 0, "c": 0})
-    day["cal"] += cal
-    day["p"] += p
-    day["f"] += f
-    day["c"] += c
+    await add_user_totals(user_id, {"cal": cal, "p": p, "f": f, "c": c})
 
     await q.edit_message_text(
         f"✅ Добавлено:\n"
@@ -139,7 +195,7 @@ async def day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    day = context.user_data.get("day_total")
+    day = await get_user_totals(q.from_user.id)
 
     if not day or day["cal"] == 0:
         await q.edit_message_text("❌ За сегодня ещё ничего не добавлено.")

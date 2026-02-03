@@ -13,7 +13,6 @@ from telegram.ext import (
 
 BOT_TOKEN = "8060994884:AAEjYeBOg8RiLZ66-W3uEemsVW60ACiJA2M"
 USER_DATA_FILE = Path("users_data.json")
-USER_TOTALS_DEFAULT = {"cal": 0, "p": 0, "f": 0, "c": 0}
 user_totals_lock = asyncio.Lock()
 
 # ================== ЗАГРУЗКА БАЗЫ ==================
@@ -31,12 +30,6 @@ def load_user_totals():
 
     totals = {}
     for user_id, stats in data.items():
-        totals[user_id] = {
-            "cal": float(stats.get("cal", stats.get("calories", 0))),
-            "p": float(stats.get("p", stats.get("protein", 0))),
-            "f": float(stats.get("f", stats.get("fat", 0))),
-            "c": float(stats.get("c", stats.get("carbs", 0))),
-        }
     return totals
 
 def save_user_totals(totals: dict):
@@ -46,6 +39,7 @@ def save_user_totals(totals: dict):
             "p": stats["p"],
             "f": stats["f"],
             "c": stats["c"],
+            "meals": stats["meals"],
         }
         for user_id, stats in totals.items()
     }
@@ -57,21 +51,27 @@ async def ensure_user_totals(user_id: int):
     async with user_totals_lock:
         key = str(user_id)
         if key not in user_totals:
-            user_totals[key] = USER_TOTALS_DEFAULT.copy()
+            user_totals[key] = build_totals_default()
             save_user_totals(user_totals)
 
 async def get_user_totals(user_id: int) -> dict:
     async with user_totals_lock:
-        return user_totals.get(str(user_id), USER_TOTALS_DEFAULT.copy()).copy()
+        return user_totals.get(str(user_id), build_totals_default()).copy()
 
-async def add_user_totals(user_id: int, delta: dict):
+async def add_user_totals(user_id: int, delta: dict, meal_key: Optional[str] = None):
     async with user_totals_lock:
         key = str(user_id)
-        current = user_totals.setdefault(key, USER_TOTALS_DEFAULT.copy())
+        current = user_totals.setdefault(key, build_totals_default())
         current["cal"] += delta.get("cal", 0)
         current["p"] += delta.get("p", 0)
         current["f"] += delta.get("f", 0)
         current["c"] += delta.get("c", 0)
+        if meal_key in MEAL_LABELS:
+            meal_stats = current["meals"].setdefault(meal_key, {"cal": 0, "p": 0, "f": 0, "c": 0})
+            meal_stats["cal"] += delta.get("cal", 0)
+            meal_stats["p"] += delta.get("p", 0)
+            meal_stats["f"] += delta.get("f", 0)
+            meal_stats["c"] += delta.get("c", 0)
         save_user_totals(user_totals)
 
 # ================== УТИЛИТЫ ==================
@@ -170,6 +170,7 @@ async def meal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product = context.user_data["product"]
     cat = context.user_data["category"]
     user_id = q.from_user.id
+    meal_key = q.data.split("|")[1]
 
     data = products_by_cat[cat][product]
 
@@ -178,7 +179,7 @@ async def meal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f = data["fat"] * grams / 100
     c = data["carbs"] * grams / 100
 
-    await add_user_totals(user_id, {"cal": cal, "p": p, "f": f, "c": c})
+    await add_user_totals(user_id, {"cal": cal, "p": p, "f": f, "c": c}, meal_key)
 
     await q.edit_message_text(
         f"✅ Добавлено:\n"
@@ -202,12 +203,22 @@ async def day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(q)
         return
 
+    meals_lines = []
+    for meal_key, label in MEAL_LABELS.items():
+        meal = day.get("meals", {}).get(meal_key, {"cal": 0, "p": 0, "f": 0, "c": 0})
+        meals_lines.append(
+            f"{label}: {meal['cal']:.1f} ккал "
+            f"(Б/Ж/У {meal['p']:.1f}/{meal['f']:.1f}/{meal['c']:.1f})"
+        )
+
     await q.edit_message_text(
-        f"📊 Итог за день:\n\n"
+        "📊 Итог за день:\n\n"
         f"Калории: {day['cal']:.1f}\n"
         f"Белки: {day['p']:.1f} г\n"
         f"Жиры: {day['f']:.1f} г\n"
-        f"Углеводы: {day['c']:.1f} г"
+        f"Углеводы: {day['c']:.1f} г\n\n"
+        "По приёмам пищи:\n"
+        + "\n".join(meals_lines)
     )
 
     await show_main_menu(q)

@@ -1,7 +1,6 @@
 import json
 import asyncio
 from pathlib import Path
-from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,23 +13,6 @@ from telegram.ext import (
 
 BOT_TOKEN = "8060994884:AAEjYeBOg8RiLZ66-W3uEemsVW60ACiJA2M"
 USER_DATA_FILE = Path("users_data.json")
-MEAL_LABELS = {
-    "z": "Завтрак",
-    "o": "Обед",
-    "u": "Ужин",
-    "p": "Перекус",
-}
-
-def build_totals_default():
-    return {
-        "cal": 0,
-        "p": 0,
-        "f": 0,
-        "c": 0,
-        "meals": {meal_key: {"cal": 0, "p": 0, "f": 0, "c": 0} for meal_key in MEAL_LABELS},
-    }
-
-USER_TOTALS_DEFAULT = build_totals_default()
 user_totals_lock = asyncio.Lock()
 
 # ================== ЗАГРУЗКА БАЗЫ ==================
@@ -48,20 +30,6 @@ def load_user_totals():
 
     totals = {}
     for user_id, stats in data.items():
-        meals_data = stats.get("meals", {})
-        totals[user_id] = build_totals_default()
-        totals[user_id]["cal"] = float(stats.get("cal", stats.get("calories", 0)))
-        totals[user_id]["p"] = float(stats.get("p", stats.get("protein", 0)))
-        totals[user_id]["f"] = float(stats.get("f", stats.get("fat", 0)))
-        totals[user_id]["c"] = float(stats.get("c", stats.get("carbs", 0)))
-        for meal_key in MEAL_LABELS:
-            meal_stats = meals_data.get(meal_key, {})
-            totals[user_id]["meals"][meal_key] = {
-                "cal": float(meal_stats.get("cal", 0)),
-                "p": float(meal_stats.get("p", 0)),
-                "f": float(meal_stats.get("f", 0)),
-                "c": float(meal_stats.get("c", 0)),
-            }
     return totals
 
 def save_user_totals(totals: dict):

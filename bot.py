@@ -12,7 +12,7 @@ from telegram.ext import (
     filters
 )
 
-BOT_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
+BOT_TOKEN = "8060994884:AAEjYeBOg8RiLZ66-W3uEemsVW60ACiJA2M"
 USER_DATA_FILE = Path("users_data.json")
 user_totals_lock = asyncio.Lock()
 
